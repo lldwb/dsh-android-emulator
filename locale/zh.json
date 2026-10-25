@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Android 模拟器",
+    "description": "让 agent 自己启动 Android 模拟器、安装 APK、像用户一样点击/滑动/输入，并看到界面（截图、UI 树）与 logcat —— 形成「改代码 → 装包 → 操作 → 断言」的闭环。支持 ARM64 APK（走 x86_64 镜像内置的 libndk_translation 转译层，自动区分 native / translated 安装并在转译时提醒性能差异）。零依赖 Host 插件，一次操作一台设备。"
+  }
+}
