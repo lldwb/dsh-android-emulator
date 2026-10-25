@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Android Emulator",
+    "description": "Lets the agent boot an Android emulator, install an APK, tap/swipe/type like a user, and see the screen (screenshots, UI tree) plus logcat — closing the loop from code change to install, interaction and assertion. ARM64 APKs are supported through the x86_64 image's built-in libndk_translation layer: installs are reported as native or translated, with a performance warning when translation is involved. Zero-dependency host plugin, one device at a time."
+  }
+}

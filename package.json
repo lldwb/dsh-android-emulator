@@ -1,0 +1,47 @@
+{
+  "name": "dsh-android-emulator",
+  "version": "1.1.2",
+  "description": "让 dsh agent 自己启动 Android 模拟器、安装 APK（含 ARM64 包走镜像内置 libndk_translation 转译）、点击/滑动/输入、看截图与 UI 树和 logcat —— 「改代码 → 装包 → 操作 → 断言」的闭环。零依赖 Host 插件。",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "icon": "./icon.svg",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "lib/**/*.mjs",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "CHANGELOG.md",
+    "test/**/*.mjs"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "android",
+    "emulator",
+    "adb",
+    "apk",
+    "uiautomator"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+# dsh-android-emulator — Android 模拟器测试工具（Host 插件，零依赖）
+#
+# 插一行全局行：这些工具在任何模式/会话里都该可用（它测的是"外部世界的安卓设备"，
+# 与当前 agent 处于哪个 preset 无关），而且插件不注册任何界面，没有 UI 半。
+#
+# 配置可写在这一行下面（全部可选）：
+#   sdkPath: '%LOCALAPPDATA%\Android\Sdk'   # 省略则自动发现
+#   avdName: 'dsh_android'
+#   outputDir: ''                            # 省略 → <tmp>/dsh-android-emulator
+#   bootTimeoutMs: 240000
+#   emulatorArgs: []
+#   adbPath: ''
+#   emulatorPath: ''
+- insert:
+    - id: android-emulator
+      name: 'dsh-android-emulator'
