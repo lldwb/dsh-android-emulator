@@ -5,6 +5,71 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-10-26
+
+### 变更（**默认行为变化**）
+
+- **多会话隔离（默认开启）**：一个 Host 进程里的多个会话现在**各自拥有一台模拟器和独立的运行状态**。
+  A 会话装包、点击、`android_emulator_stop` 都不再影响 B 会话。
+  - 会话标识来自工具 `execute(args, exec)` 的 `exec.agent.id`（即 SessionId），
+    无 agent 上下文时落到 `'shared-default'` 共享槽；
+  - 所有状态（当前设备、最近安装的包、进程归属）按 `sessionKey` 分区；
+  - `android_emulator_start` 会确保**本会话专属 AVD** `<avdNamePrefix|avdName>--<sessionShort>` 存在
+    （`sessionShort` = sessionKey 清洗后前 8 字符），用独立端口 `5554 + 2*slot` 启动，
+    返回值新增 `sessionKey` 与 `createdAvd`（是否本次新建）；
+  - `android_status` 返回值新增 `sessionKey`、`instances[{sessionKey,serial,avd,pid,booted,lastPackage}]`、
+    `instanceLimit{count,max}`、`avdDisk{sessionAvdCount,totalGb,freeDiskGb}`；
+    `avds[].kind` 区分 `session-pinned`（会话专属）与 `template`（基础模板）。
+  - 想恢复 v1.1 的共享行为：`perSession: false`（见下方「说明」）。
+- **`DEVICE_BUSY` 跨会话守卫**：**绝不静默跨会话操作**。显式传了别的会话的 `serial` 时，
+  所有设备类工具返回 `ok:false, code:"DEVICE_BUSY"` 并说明归属；
+  同时运行的模拟器数达到 `maxInstances`（默认 2）时，`android_emulator_start` 也返回 `DEVICE_BUSY`
+  并列出当前占用者与下一步。
+- **`android_emulator_stop.all` 语义变化**：从「所有设备」改为「**本会话**的全部设备」。
+- **会话 AVD 不带快照**：会话专属 AVD 统一以 `-no-snapshot` 启动，每台省下约 2.5 GB 的
+  `snapshots/default_boot/ram.img`；代价是每次走无快照冷启动（实测 38.2 s）。
+
+### 新增
+
+- **三个配置项**：`perSession`（默认 `true`）、`maxInstances`（默认 `2`，钳制 1–8）、
+  `avdNamePrefix`（会话 AVD 名前缀，空则用 `avdName`）。
+- **`android_emulator_stop.removeAvd`**（默认 `false`）：停在设备后**删除本会话**的专属 AVD，
+  释放约 4–6.5 GB 磁盘。只删自己的，不碰别人的、也不碰基础模板。
+- **磁盘可视化**：`android_status.avdDisk`（`sessionAvdCount` / `totalGb` / `freeDiskGb`），
+  剩余磁盘 < 8 GB 时 `suggestions[]` 会提示清理。
+
+### 修复
+
+- **会话专属 AVD 名会撞车（严重，本版本自身缺陷，真机回归抓到）**：真实 dsh 的 SessionId 形如
+  `session-<uuid>`，旧实现直接取前 8 字符，得到的永远是通用前缀 `session-` ——
+  **所有会话映射到同一个 AVD 名**，「一个会话一台模拟器」实际退化成「所有会话抢同一台」。
+  现在截断点落在分隔符上时改取**可辨识段**：剥掉 `session` / `agent` 等通用词后取 UUID 第一段
+  （如 `session-9e1ca070-…` → `9e1ca070`），仍拿不到则用 8 位哈希兜底。
+  *升级须知*：旧版本已创建的 `dsh_android--session-.avd` 会成为孤儿（新版本用新名字），
+  可用 `avdmanager delete avd -n "dsh_android--session-"` 删除，回收约 3.7 GB。
+- **`android_emulator_stop { removeAvd: true }` 在设备已停止时不再是无操作**：以前早退分支
+  直接返回「没有运行中的模拟器，不需要停止」，AVD 根本不删 —— 于是「先 stop、再
+  `stop { removeAvd: true }`」第二步永远回收不了磁盘。现在早退分支同样执行删除，
+  并在 message 里报告删除结果与释放空间。
+- **分支契约补齐**：per-session 专属 AVD 创建路径新增的 `NO_AVD_MANAGER` / `NO_IMAGE` /
+  `AVD_CREATE_FAILED`（`android_emulator_start`）与 `DEVICE_BUSY` / `INTERNAL`
+  （`android_emulator_stop`）已写进测试分支表；fail-open 时 `instanceLimit.max`
+  不再退化成 `0`（按配置兜成 1–8）。测试从 176/182 → **183/183 全绿**。
+- **磁盘行的措辞不再误导**：`avdDisk.sessionAvdCount` 统计的是**跨会话**的全部插件会话 AVD
+  （磁盘是共享的，预算必须按总量算），但文本行以前写作「会话 AVD N 个」，容易被读成
+  「本会话还有 N 个」。现在明确标注「（跨会话，不只本会话）」，与 `schema` 里的描述一致。
+
+### 说明
+
+- **为什么要默认开**：v1.1 及以前状态是模块级单例，多个会话共享同一台设备——A 启动的设备会被
+  B 的 screenshot/tap 直接操作、A 装的包会被 B 的 `app_launch` 默认启动、A 的 `emulator_stop`
+  会停掉 B 正在用的设备。这与「一个会话一个隔离环境」的直觉相反，也是本轮修复的问题。
+- **资源代价必须先算账**：每台会话模拟器实测约 **4–6.5 GB 磁盘**（含旧快照则更多）
+  + **2 GB RAM** + **40–90 s 启动**。`maxInstances` 默认 2，两台就是约 8–13 GB 磁盘 + 4 GB RAM。
+  磁盘紧张时调 `maxInstances: 1`，并定期用 `removeAvd: true` 清理。
+- **要旧行为**：`perSession: false`。状态仍按 `sessionKey` 分区，但只有 `shared-default` 槽被使用，
+  且**会话之间会互相干扰**（A 的点击/装包/停设备会作用在 B 的设备上）。只在愿意接受干扰时用。
+
 ## [1.1.2] - 2026-10-25
 
 ### 变更
@@ -108,6 +173,7 @@
 - **零运行时依赖**：不 import `@deepseek-ai/*`、不需要 `node_modules`，安装后立即可用，
   `install_bundle` 不会产生 pendingBuilds。
 
+[1.2.0]: https://github.com/lldwb/dsh-android-emulator/releases/tag/v1.2.0
 [1.1.2]: https://github.com/lldwb/dsh-android-emulator/releases/tag/v1.1.2
 [1.1.1]: https://github.com/lldwb/dsh-android-emulator/releases/tag/v1.1.1
 [1.1.0]: https://github.com/lldwb/dsh-android-emulator/releases/tag/v1.1.0

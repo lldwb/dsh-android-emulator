@@ -41,8 +41,13 @@ function asNumber(value, min, max, fallback) {
 /**
  * 归一化插件配置（DESIGN §6 的字段，全部可选）。
  *
+ * v1.2.0 新增三个多会话相关字段：
+ * - `perSession`（默认 true）：每会话独立模拟器；false = 退回 v1.1 的全局共享行为；
+ * - `maxInstances`（默认 2，钳制 1..8）：同时运行的模拟器上限（DESIGN §7.3 磁盘预算）；
+ * - `avdNamePrefix`（默认 ''）：会话专属 AVD 名前缀，空则用 `avdName`。
+ *
  * @param {unknown} config `cordis.patch.yml` 里该行的 config。
- * @returns {{ sdkPath: string, avdName: string, outputDir: string, bootTimeoutMs: number, emulatorArgs: string[], adbPath: string, emulatorPath: string }}
+ * @returns {{ sdkPath: string, avdName: string, outputDir: string, bootTimeoutMs: number, emulatorArgs: string[], adbPath: string, emulatorPath: string, perSession: boolean, maxInstances: number, avdNamePrefix: string }}
  */
 export function normalizeConfig(config) {
   const raw = config !== null && typeof config === 'object' ? config : {};
@@ -58,6 +63,9 @@ export function normalizeConfig(config) {
       : [],
     adbPath: asString(raw.adbPath),
     emulatorPath: asString(raw.emulatorPath),
+    perSession: raw.perSession !== false,
+    maxInstances: Math.round(asNumber(raw.maxInstances, 1, 8, 2)),
+    avdNamePrefix: asString(raw.avdNamePrefix),
   };
 }
 

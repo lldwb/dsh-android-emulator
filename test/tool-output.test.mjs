@@ -59,8 +59,24 @@ const TOOL_CODES = Object.freeze({
     'EMULATOR_START_FAILED',
     'BOOT_TIMEOUT',
     'SPAWN_DENIED',
+    // v1.2.0：本会话实例数已达 maxInstances，不再起新的
+    'DEVICE_BUSY',
+    // v1.2.0：per-session 专属 AVD 需要 avdmanager，缺失时在这里失败
+    'NO_AVD_MANAGER',
+    // v1.2.0：per-session 专属 AVD 创建路径的两个新失败分支
+    'NO_IMAGE',
+    'AVD_CREATE_FAILED',
   ],
-  android_emulator_stop: ['OK', 'NO_SDK', 'MULTIPLE_DEVICES', 'TIMEOUT'],
+  android_emulator_stop: [
+    'OK',
+    'NO_SDK',
+    'MULTIPLE_DEVICES',
+    'TIMEOUT',
+    // v1.2.0：跨会话归属守卫（serial 属于别的会话）
+    'DEVICE_BUSY',
+    // v1.2.0：stop 的兜底 catch（进程树终止异常等）
+    'INTERNAL',
+  ],
   android_apk_install: [
     'OK',
     'BAD_ARGUMENT',
@@ -323,16 +339,24 @@ test('每个工具的成功分支（含非空嵌套值）都满足 output.schema
     const successExtras = {
       android_status: {
         sdk: { found: true, root: 'C:\\Sdk', adb: 'C:\\Sdk\\platform-tools\\adb.exe', emulator: 'C:\\Sdk\\emulator\\emulator.exe', avdmanager: 'C:\\Sdk\\cmdline-tools\\latest\\bin\\avdmanager.bat', sdkmanager: 'C:\\Sdk\\cmdline-tools\\latest\\bin\\sdkmanager.bat' },
-        avds: [{ name: 'dsh_android', target: 'android-35', abi: 'x86_64', path: 'C:\\Users\\x\\.android\\avd\\dsh_android.avd' }],
+        avds: [{ name: 'dsh_android--abcdefgh', target: 'android-35', abi: 'x86_64', path: 'C:\\Users\\x\\.android\\avd\\dsh_android--abcdefgh.avd', kind: 'session-pinned' }],
         images: [{ package: 'system-images;android-35;google_apis;x86_64', api: 35, tag: 'google_apis', abi: 'x86_64' }],
-        device: { serial: 'emulator-5554', state: 'device', booted: true, avd: 'dsh_android', abis: ['x86_64', 'arm64-v8a'] },
+        device: { serial: 'emulator-5554', state: 'device', booted: true, avd: 'dsh_android--abcdefgh', abis: ['x86_64', 'arm64-v8a'] },
         // v1.1.0：本机真实形态（libndk_translation 0.2.3，arm64 可用 / arm32 不可用）
         translation: NDK_TRANSLATION,
         acceleration: { ok: true, kind: 'whpx', raw: 'WHPX is installed and usable.' },
+        // v1.2.0：多会话隔离
+        sessionKey: 'session-abcdefgh',
+        instances: [
+          { sessionKey: 'session-ab…', serial: 'emulator-5554', avd: 'dsh_android--abcdefgh', pid: 12345, booted: true, lastPackage: 'com.example.demo' },
+          { sessionKey: 'shared-default', serial: 'emulator-5556', avd: 'dsh_android--shared', pid: 23456, booted: false, lastPackage: '' },
+        ],
+        instanceLimit: { count: 2, max: 2 },
+        avdDisk: { sessionAvdCount: 2, totalGb: 11.3, freeDiskGb: 25.7 },
         suggestions: ['可以 android_apk_install 装包。'],
       },
       android_avd_create: { avd: 'dsh_android', image: 'system-images;android-35;google_apis;x86_64', created: true, command: ['C:\\Sdk\\cmdline-tools\\latest\\bin\\avdmanager.bat', 'create', 'avd', '-n', 'dsh_android', '-k', 'system-images;android-35;google_apis;x86_64'] },
-      android_emulator_start: { serial: 'emulator-5554', avd: 'dsh_android', pid: 12345, bootedInMs: 45000, logFile: 'C:\\tmp\\dsh-android-emulator\\emulator-dsh_android.log', translation: NDK_TRANSLATION },
+      android_emulator_start: { serial: 'emulator-5554', avd: 'dsh_android--abcdefgh', pid: 12345, bootedInMs: 45000, logFile: 'C:\\tmp\\dsh-android-emulator\\emulator-dsh_android--abcdefgh.log', translation: NDK_TRANSLATION, sessionKey: 'session-abcdefgh', createdAvd: true },
       android_emulator_stop: { serial: 'emulator-5554', stopped: true },
       android_apk_install: {
         package: 'com.example.demo', versionName: '1.0', versionCode: 1,
@@ -724,4 +748,233 @@ test('v1.1.0：translation 是可无损 JSON 往返的纯数据（含数组）',
     required: ['enabled'],
   };
   assert.ok(validateToolOutput(schema, { enabled: undefined }).length > 0);
+});
+
+/* ------------------------------------------------------------------ *
+ * 6. v1.2.0 扩展：sessionKey / instances / instanceLimit / avdDisk /
+ *                createdAvd / removedAvd 必须在**所有分支**完整
+ * ------------------------------------------------------------------ */
+
+/** `instances[]` 每一项的子字段（DESIGN §3）。 */
+const INSTANCE_FIELDS = ['sessionKey', 'serial', 'avd', 'pid', 'booted', 'lastPackage'];
+
+/** `avds[].kind` 的三个合法取值（DESIGN §3）。 */
+const AVD_KINDS = ['session-pinned', 'template', 'other'];
+
+/**
+ * 断言 `instances[]` 里每一项都是**完整**的（6 子字段全在、类型对）。
+ *
+ * 为什么严格：`instances[]` 在 output.schema 里是 `additionalProperties:false` 的严格 object，
+ * 6 个字段全 required。失败分支如果给 `[]` 是合法的（没有实例），但**给了对象就必须完整**——
+ * 少一个字段会被运行时判 `missing required property`，多一个会被判 `is not a declared property`。
+ *
+ * @param {unknown} instances 待检查的 instances。
+ * @param {string} label 诊断标签。
+ * @returns {void}
+ */
+function assertCompleteInstances(instances, label) {
+  assert.ok(Array.isArray(instances), `${label}: instances 必须是数组`);
+  for (const [index, entry] of instances.entries()) {
+    assert.equal(typeof entry, 'object', `${label}.instances[${index}] 必须是对象`);
+    assert.notEqual(entry, null);
+    assert.notDeepEqual(entry, {}, `${label}.instances[${index}] 不能是空对象`);
+    assert.deepEqual(
+      Object.keys(entry).sort(),
+      [...INSTANCE_FIELDS].sort(),
+      `${label}.instances[${index}] 的字段必须恰好是契约那 6 个`,
+    );
+    const types = {
+      sessionKey: 'string',
+      serial: 'string',
+      avd: 'string',
+      pid: 'number',
+      booted: 'boolean',
+      lastPackage: 'string',
+    };
+    for (const [field, type] of Object.entries(types)) {
+      assert.equal(typeof entry[field], type, `${label}.instances[${index}].${field} 类型应为 ${type}`);
+      assert.notEqual(entry[field], undefined, `${label}.instances[${index}].${field} 不能是 undefined`);
+    }
+    // sessionKey 不能是空串（否则 instances 分不清归属）
+    assert.ok(entry.sessionKey.length > 0, `${label}.instances[${index}].sessionKey 不能为空串`);
+  }
+}
+
+/**
+ * 断言 `instanceLimit` 是完整的 `{count, max}`（都是 number，max 在 1..8）。
+ *
+ * @param {unknown} instanceLimit 待检查值。
+ * @param {string} label 诊断标签。
+ * @returns {void}
+ */
+function assertCompleteInstanceLimit(instanceLimit, label) {
+  assert.equal(typeof instanceLimit, 'object', `${label}: instanceLimit 必须是对象`);
+  assert.notEqual(instanceLimit, null);
+  assert.deepEqual(Object.keys(instanceLimit).sort(), ['count', 'max'], `${label}: instanceLimit 必须恰好有 count/max`);
+  assert.equal(typeof instanceLimit.count, 'number', `${label}.instanceLimit.count 必须是 number`);
+  assert.equal(typeof instanceLimit.max, 'number', `${label}.instanceLimit.max 必须是 number`);
+  assert.ok(Number.isInteger(instanceLimit.count), `${label}.instanceLimit.count 必须是整数`);
+  assert.ok(Number.isInteger(instanceLimit.max), `${label}.instanceLimit.max 必须是整数`);
+  // DESIGN §7.2 / §6：maxInstances 钳制 1..8
+  assert.ok(
+    instanceLimit.max >= 1 && instanceLimit.max <= 8,
+    `${label}.instanceLimit.max 必须在 1..8（实际 ${instanceLimit.max}）`,
+  );
+  assert.ok(instanceLimit.count >= 0, `${label}.instanceLimit.count 不能是负数`);
+}
+
+/**
+ * 断言 `avdDisk` 是完整的 3 字段（都是非负 number）。
+ *
+ * @param {unknown} avdDisk 待检查值。
+ * @param {string} label 诊断标签。
+ * @returns {void}
+ */
+function assertCompleteAvdDisk(avdDisk, label) {
+  assert.equal(typeof avdDisk, 'object', `${label}: avdDisk 必须是对象`);
+  assert.notEqual(avdDisk, null);
+  assert.deepEqual(
+    Object.keys(avdDisk).sort(),
+    ['freeDiskGb', 'sessionAvdCount', 'totalGb'],
+    `${label}: avdDisk 必须恰好有 3 个子字段`,
+  );
+  for (const field of ['sessionAvdCount', 'totalGb', 'freeDiskGb']) {
+    assert.equal(typeof avdDisk[field], 'number', `${label}.avdDisk.${field} 必须是 number`);
+    assert.ok(Number.isFinite(avdDisk[field]), `${label}.avdDisk.${field} 必须是有限数`);
+    assert.ok(avdDisk[field] >= 0, `${label}.avdDisk.${field} 不能是负数`);
+  }
+}
+
+test('v1.2.0：android_status 在**每一个** code 分支里都带完整的 sessionKey/instances/instanceLimit/avdDisk', async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'dsh-v12-branches-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  await withNoSdkEnv(async () => {
+    const tools = await loadToolDefinitions(offlineConfig(directory));
+    const definition = tools.get('android_status');
+    const defaults = defaultsOf(await definition.execute(offlineArgs('android_status'), {}));
+
+    for (const code of TOOL_CODES.android_status) {
+      // 注意：OK 分支要用**真实的** instanceLimit（defaults 里是 max:0 的空值，不是合法上限），
+      // 否则这里会拿"空值构造"去验"1..8 的钳制"，属于测试自己造出来的假红。
+      const override =
+        code === 'OK'
+          ? { ok: true, code: 'OK', message: 'x', instanceLimit: { count: 1, max: 2 }, avdDisk: { sessionAvdCount: 1, totalGb: 5.2, freeDiskGb: 25.7 } }
+          : { ok: false, code, message: 'x' };
+      const value = { ...defaults, ...override };
+      assertOutput(definition, value, `android_status（${code}）`, code);
+
+      // 四个 v1.2.0 字段在**所有**分支都必须存在且形状完整
+      assert.equal(typeof value.sessionKey, 'string', `android_status（${code}）: sessionKey 必须是 string`);
+      assert.ok(value.sessionKey.length > 0, `android_status（${code}）: sessionKey 不能为空串`);
+      assertCompleteInstances(value.instances, `android_status（${code}）`);
+      assertCompleteInstanceLimit(value.instanceLimit, `android_status（${code}）`);
+      assertCompleteAvdDisk(value.avdDisk, `android_status（${code}）`);
+      // avds[] 的每一项都必须带 kind，且是三个合法值之一
+      for (const [index, avd] of value.avds.entries()) {
+        assert.ok(
+          AVD_KINDS.includes(avd.kind),
+          `android_status（${code}）.avds[${index}].kind 非法：${JSON.stringify(avd.kind)}`,
+        );
+      }
+    }
+  });
+});
+
+test('v1.2.0：android_emulator_start 在**每一个** code 分支里都带 sessionKey 与 createdAvd', async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'dsh-v12-start-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  await withNoSdkEnv(async () => {
+    const tools = await loadToolDefinitions(offlineConfig(directory));
+    const definition = tools.get('android_emulator_start');
+    const defaults = defaultsOf(await definition.execute(offlineArgs('android_emulator_start'), {}));
+
+    for (const code of TOOL_CODES.android_emulator_start) {
+      const value =
+        code === 'OK'
+          ? { ...defaults, ok: true, code: 'OK', message: 'x' }
+          : { ...defaults, ok: false, code, message: 'x' };
+      assertOutput(definition, value, `android_emulator_start（${code}）`, code);
+      assert.equal(typeof value.sessionKey, 'string', `${code}: sessionKey 必须是 string`);
+      assert.ok(value.sessionKey.length > 0, `${code}: sessionKey 不能为空串`);
+      assert.equal(typeof value.createdAvd, 'boolean', `${code}: createdAvd 必须是 boolean`);
+    }
+  });
+});
+
+test('v1.2.0：android_emulator_stop 在**每一个** code 分支里都带 removedAvd（未删是空串不是 null）', async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'dsh-v12-stop-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  await withNoSdkEnv(async () => {
+    const tools = await loadToolDefinitions(offlineConfig(directory));
+    const definition = tools.get('android_emulator_stop');
+    const defaults = defaultsOf(await definition.execute(offlineArgs('android_emulator_stop'), {}));
+
+    for (const code of TOOL_CODES.android_emulator_stop) {
+      const value =
+        code === 'OK'
+          ? { ...defaults, ok: true, code: 'OK', message: 'x' }
+          : { ...defaults, ok: false, code, message: 'x' };
+      assertOutput(definition, value, `android_emulator_stop（${code}）`, code);
+      assert.equal(typeof value.removedAvd, 'string', `${code}: removedAvd 必须是 string（未删时空串）`);
+      assert.notEqual(value.removedAvd, null, `${code}: removedAvd 不能用 null 表示"没删"`);
+      assert.notEqual(value.removedAvd, undefined, `${code}: removedAvd 不能是 undefined`);
+    }
+  });
+});
+
+test('v1.2.0：status 的 instances 非空列表里会有多个会话（展示跨会话占用）', async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'dsh-v12-instances-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  await withNoSdkEnv(async () => {
+    const tools = await loadToolDefinitions(offlineConfig(directory));
+    const definition = tools.get('android_status');
+    const defaults = defaultsOf(await definition.execute(offlineArgs('android_status'), {}));
+
+    const instances = [
+      { sessionKey: 'shared-default', serial: 'emulator-5554', avd: 'dsh_android--shared', pid: 111, booted: true, lastPackage: '' },
+      { sessionKey: 'session-a', serial: 'emulator-5556', avd: 'dsh_android--session', pid: 222, booted: false, lastPackage: 'com.example.demo' },
+    ];
+    const value = {
+      ...defaults,
+      sessionKey: 'shared-default',
+      instances,
+      instanceLimit: { count: 2, max: 2 },
+      avdDisk: { sessionAvdCount: 2, totalGb: 11.3, freeDiskGb: 25.7 },
+      ok: true,
+      code: 'OK',
+      message: 'x',
+    };
+    assertOutput(definition, value, 'android_status（多实例成功）', 'OK');
+    assertCompleteInstances(value.instances, 'android_status（多实例）');
+    assert.equal(value.instances.length, 2);
+  });
+});
+
+test('v1.2.0：avds[].kind 三值都合法；实例上限与磁盘数都是合法数值', async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'dsh-v12-kinds-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  await withNoSdkEnv(async () => {
+    const tools = await loadToolDefinitions(offlineConfig(directory));
+    const definition = tools.get('android_status');
+    const defaults = defaultsOf(await definition.execute(offlineArgs('android_status'), {}));
+
+    const avds = [
+      { name: 'dsh_android', target: 'android-35', abi: 'x86_64', path: 'p', kind: 'template' },
+      { name: 'dsh_android--abc', target: 'android-35', abi: 'x86_64', path: 'p', kind: 'session-pinned' },
+      { name: 'other_avd', target: 'android-34', abi: 'x86_64', path: 'p', kind: 'other' },
+    ];
+    const value = { ...defaults, avds, ok: true, code: 'OK', message: 'x' };
+    assertOutput(definition, value, 'android_status（三种 kind）', 'OK');
+    assert.deepEqual(value.avds.map((avd) => avd.kind), ['template', 'session-pinned', 'other']);
+
+    // 钳制边界：max 只能是 1..8
+    for (const max of [1, 2, 8]) {
+      assertCompleteInstanceLimit({ count: 0, max }, `instanceLimit(max=${max})`);
+    }
+  });
 });

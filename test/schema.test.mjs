@@ -221,7 +221,7 @@ test('DESIGN §3 的关键参数与工具一一对应（防参数改名/漏参�
     android_status: [],
     android_avd_create: ['name', 'image', 'device', 'force'],
     android_emulator_start: ['avd', 'headless', 'cold', 'timeoutMs', 'port'],
-    android_emulator_stop: ['serial', 'all'],
+    android_emulator_stop: ['serial', 'all', 'removeAvd'],
     android_apk_install: ['apk', 'serial', 'grantPermissions', 'reinstall'],
     android_app_launch: ['package', 'activity', 'serial', 'stopFirst', 'settleMs'],
     android_app_stop: ['package', 'serial'],
@@ -438,5 +438,142 @@ test('契约守护：android_emulator_start **没有** nativeBridge 参数（转
       false,
       `${name} 不该有 nativeBridge 参数`,
     );
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * v1.2.0：多会话隔离（DESIGN §3 / §7.2）的 schema 漂移测试
+ * ------------------------------------------------------------------ */
+
+/** `instances[]` 里每一项的子字段（DESIGN §3）。 */
+const INSTANCE_SUB_FIELDS = ['sessionKey', 'serial', 'avd', 'pid', 'booted', 'lastPackage'];
+
+test('v1.2.0 漂移：android_status 声明了 sessionKey / instances / instanceLimit / avdDisk', async () => {
+  const definitions = await loadToolDefinitions({});
+  const schema = definitions.get('android_status').output.schema;
+  for (const field of ['sessionKey', 'instances', 'instanceLimit', 'avdDisk']) {
+    assert.ok(
+      Object.hasOwn(schema.properties, field),
+      `android_status.output.schema 缺 "${field}"（v1.2.0 契约要求）`,
+    );
+    assert.ok(schema.required.includes(field), `android_status.${field} 必须在 required 里`);
+  }
+  assert.equal(schema.properties.sessionKey.type, 'string', 'sessionKey 必须是 string');
+});
+
+test('v1.2.0 漂移：instances[] 的子字段全 required、都声明、类型正确', async () => {
+  const definitions = await loadToolDefinitions({});
+  const instances = definitions.get('android_status').output.schema.properties.instances;
+  assert.equal(instances.type, 'array', 'instances 必须是数组');
+  const item = instances.items;
+  assert.equal(item.type, 'object', 'instances[] 必须是 object');
+  assert.equal(item.additionalProperties, false, 'instances[] 必须 additionalProperties:false');
+  assert.deepEqual(
+    Object.keys(item.properties).sort(),
+    [...INSTANCE_SUB_FIELDS].sort(),
+    'instances[] 的子字段必须恰好是契约那些',
+  );
+  assert.deepEqual(
+    [...(item.required ?? [])].sort(),
+    [...INSTANCE_SUB_FIELDS].sort(),
+    'instances[] 的每个子字段都必须 required（少一个就会被 JSON 投影丢掉）',
+  );
+  const expected = {
+    sessionKey: 'string',
+    serial: 'string',
+    avd: 'string',
+    pid: 'number',
+    booted: 'boolean',
+    lastPackage: 'string',
+  };
+  for (const [field, type] of Object.entries(expected)) {
+    assert.equal(item.properties[field].type, type, `instances[].${field} 类型应为 ${type}`);
+  }
+});
+
+test('v1.2.0 漂移：instanceLimit 是 count/max 两个 number，avdDisk 是 3 个 number', async () => {
+  const definitions = await loadToolDefinitions({});
+  const schema = definitions.get('android_status').output.schema;
+
+  const instanceLimit = schema.properties.instanceLimit;
+  assert.equal(instanceLimit.type, 'object');
+  assert.equal(instanceLimit.additionalProperties, false);
+  assert.deepEqual(Object.keys(instanceLimit.properties).sort(), ['count', 'max']);
+  assert.deepEqual([...(instanceLimit.required ?? [])].sort(), ['count', 'max']);
+  for (const field of ['count', 'max']) {
+    assert.equal(instanceLimit.properties[field].type, 'number', `instanceLimit.${field} 必须是 number`);
+  }
+
+  const avdDisk = schema.properties.avdDisk;
+  assert.equal(avdDisk.type, 'object');
+  assert.equal(avdDisk.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(avdDisk.properties).sort(),
+    ['freeDiskGb', 'sessionAvdCount', 'totalGb'],
+    'avdDisk 必须恰好有 3 个子字段',
+  );
+  assert.deepEqual(
+    [...(avdDisk.required ?? [])].sort(),
+    ['freeDiskGb', 'sessionAvdCount', 'totalGb'],
+    'avdDisk 的 3 个子字段都必须 required',
+  );
+  for (const field of ['sessionAvdCount', 'totalGb', 'freeDiskGb']) {
+    assert.equal(avdDisk.properties[field].type, 'number', `avdDisk.${field} 必须是 number`);
+  }
+});
+
+test('v1.2.0 漂移：android_status 的 avds[] 带 kind（session-pinned / template）', async () => {
+  const definitions = await loadToolDefinitions({});
+  const avds = definitions.get('android_status').output.schema.properties.avds;
+  const item = avds.items;
+  assert.ok(Object.hasOwn(item.properties, 'kind'), 'avds[] 缺 kind（v1.2.0 用来区分会话专属/模板）');
+  assert.equal(item.properties.kind.type, 'string', 'avds[].kind 必须是 string');
+  const description = item.properties.kind.description ?? '';
+  for (const kind of ['session-pinned', 'template']) {
+    assert.ok(description.includes(kind), `avds[].kind 的 description 应提到 "${kind}"`);
+  }
+  assert.ok((item.required ?? []).includes('kind'), 'avds[].kind 必须在 required 里');
+});
+
+test('v1.2.0 漂移：android_emulator_start 返回 sessionKey / createdAvd，参数仍是 5 个', async () => {
+  const definitions = await loadToolDefinitions({});
+  const definition = definitions.get('android_emulator_start');
+  const schema = definition.output.schema;
+
+  for (const field of ['sessionKey', 'createdAvd']) {
+    assert.ok(Object.hasOwn(schema.properties, field), `android_emulator_start.output 缺 "${field}"`);
+    assert.ok(schema.required.includes(field), `android_emulator_start.${field} 必须在 required 里`);
+  }
+  assert.equal(schema.properties.sessionKey.type, 'string');
+  assert.equal(schema.properties.createdAvd.type, 'boolean', 'createdAvd 必须是 boolean');
+
+  // 转译层「关闭开关」已被实测推翻（v1.1.0），参数集必须保持着 5 个
+  assert.deepEqual(
+    Object.keys(definition.parameters.properties).sort(),
+    ['avd', 'cold', 'headless', 'port', 'timeoutMs'],
+    'android_emulator_start 的参数仍应是 5 个（nativeBridge 不得回归）',
+  );
+});
+
+test('v1.2.0 漂移：android_emulator_stop 有 removeAvd 可选参数（不在 required 里）', async () => {
+  const definitions = await loadToolDefinitions({});
+  const parameters = definitions.get('android_emulator_stop').parameters;
+  assert.ok(Object.hasOwn(parameters.properties, 'removeAvd'), 'android_emulator_stop 缺 removeAvd 参数');
+  assert.equal(parameters.properties.removeAvd.type, 'boolean', 'removeAvd 必须是 boolean');
+  assert.equal(
+    (parameters.required ?? []).includes('removeAvd'),
+    false,
+    'removeAvd 是可选参数（默认 false），不能进 required',
+  );
+  assert.deepEqual(Object.keys(parameters.properties).sort(), ['all', 'removeAvd', 'serial']);
+});
+
+test('v1.2.0 漂移：sessionKey 只在 status / emulator_start 的返回里（其它工具不该有）', async () => {
+  const definitions = await loadToolDefinitions({});
+  const owners = ['android_status', 'android_emulator_start'];
+  for (const [name, definition] of definitions) {
+    const has = Object.hasOwn(definition.output.schema.properties, 'sessionKey');
+    if (owners.includes(name)) assert.equal(has, true, `${name} 应有 sessionKey`);
+    else assert.equal(has, false, `${name} 不该有 sessionKey`);
   }
 });
