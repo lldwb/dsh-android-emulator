@@ -242,11 +242,19 @@ A 调 `emulator_stop` 会停掉 B 正在用的设备。
    `lib/state.mjs#sessionShort`：按分隔符切段、剥掉 `session`/`agent` 等通用词、取第一段
    （`session-9e1ca070-…` → `9e1ca070`），没有可辨识段时用 8 位哈希兜底。不存在则用
    `avdmanager create avd` 从同一 system-image + 同一 device 配置创建（`createdAvd:true`）。
-3. 端口：从 5554 起按 slot 分配（`5554 + 2*slot`），被占则顺延；启动前用 `adb devices` 校验。
+3. 端口：从 5554 起按 slot 分配（`5554 + 2*slot`），被占则顺延。**占用集合必须包含
+   `adb devices` 里的全部设备（含 `offline` / `unauthorized`）**，不能只算 `device`——
+   offline 的设备一样占着端口（v1.2.1 真机并发回归：只算 device 时两个会话两次都选中 5554）。
+   分配后**用已知 port 反推 serial**（`emulator-<port>`）来认领自己启动的设备，不要用
+   「启动后新出现的 `emulator-*`」——并发时会把别人先出现的设备认成自己的。
+   另外 Windows 上 `emulator.exe` 是启动器（拉起 `qemu-system-*-headless.exe` 后可能自己先退出），
+   所以「启动器 pid 不在了」不能立刻判失败，要留宽限期（45 s）并同时看设备是否出现。
 4. **实例上限**：同时运行的模拟器数 ≥ `maxInstances`（默认 2）→ 返回 `DEVICE_BUSY`，
    message 列出当前占用者（sessionKey 前 8 字符 + serial）并给下一步（停别的会话 / 调大 maxInstances）。
 5. `android_emulator_stop` **只停本会话**的设备。给了 `serial` 但它属于别的会话 → `DEVICE_BUSY`
    并说明归属（**不静默停别人的设备**）。`all:true` 也只停本会话的全部。
+   幂等只对「省略 serial」成立；显式传一个**从没存在过**的 serial → `DEVICE_NOT_RUNNING`
+   （v1.2.1 修：以前会对任意不存在的 serial 报「已停止 1 台」，是假成功，还绕过了归属判定）。
 6. `perSession: false` → 退回 v1.1 的共享行为（状态仍按会话分区，但只有 `shared-default` 槽被使用）。
 
 **绝不静默跨会话操作**：任何工具在「显式给了 serial、但该 serial 不属于本会话」时，

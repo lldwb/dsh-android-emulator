@@ -5,6 +5,36 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.1] - 2026-10-26
+
+### 修复（多会话并发场景下的四个真实缺陷，均由双会话真机回归暴露）
+
+- **`emulator_start` 并发时会认领别人的设备**：等设备出现用的是「启动后新出现的 `emulator-*`」，
+  两个会话同时启动时，B 的设备可能先出现，A 会把它当成自己的。端口是自己分配的，
+  所以改成**用已知 port 反推 serial**（`emulator-<port>`），彻底消除互认可能。
+- **端口选择会撞车**：`taken` 集合只统计 `state === 'device'` 的设备，漏掉 **offline /
+  unauthorized** 的——它们一样占着端口。实测两个会话两次都选中 `5554`。
+  现在按 `adb devices` 的**全量**列表 + 进程表排重。
+- **启动器退出被误报成启动失败**：Windows 上 `emulator.exe` 会拉起
+  `qemu-system-*-headless.exe` 后自己先退出，旧判据只看启动器 pid，于是设备明明还在
+  offline 启动中却报 `EMULATOR_START_FAILED`，agent 重试 → 撞端口 → 雪崩。
+  现在加 45 s 宽限期：宽限期过了、启动器仍不在、设备也没出现，才判失败。
+- **`emulator_stop` 对「从未存在过」的 serial 伪造成功**：以前对任意不存在的 serial 都走幂等
+  分支，报「已停止本会话 1 台模拟器」，而实际什么都没停（该过程还绕过了归属判定：
+  启动超时会清掉进程记录，归属信息随之丢失）。现在区分两种情况——
+  「本会话记录过但设备已消失」= 幂等成功；「从没见过这个 serial」= `DEVICE_NOT_RUNNING`。
+
+### 验证
+
+- 单测 184/184 全绿（新增 1 条幽灵 serial 的回归用例 + 1 条双会话命名用例）。
+- 双会话真机回归（两个 `agent.id`、真实 SDK/emulator/adb）：**命名隔离、sessionKey 分区、
+  跨会话拒绝（不再伪造成功）、各自 `removeAvd` 只删自己的 AVD —— 全部 PASS**。
+- ⚠️ 「两台同时在线并互相操作」这一段**未能在本机完成**：回归途中本机 WHPX 进入故障态
+  （`emulator -accel-check` 仍报 usable，但**模板 AVD 用纯命令行也启动不到 `boot_completed`**，
+  日志停在 `WHPX ... operational`、androidboot 参数块重复 3 次）。同一台模板 AVD
+  在此之前（同一天 14:16/14:22 两次沙箱回归）都只用 69–70 s 就 boot 完成，
+  说明是宿主机虚拟化状态问题，不是插件缺陷。恢复需重启 Windows。
+
 ## [1.2.0] - 2026-10-26
 
 ### 变更（**默认行为变化**）

@@ -681,7 +681,12 @@ devkit_sandbox_run     { name, task: "调用 android_status / android_logcat / a
 | `output.render` | 15 个工具全部可渲染为中文可读文本（沙箱里模型看到的正是这些文本） |
 
 另：`android_emulator_start` 单独实测 —— 冷启动 **38.2 s** 到 `boot_completed=1`（WHPX + SwiftShader，
-无窗口），返回 pid / logFile / serial 均正确；`android_emulator_stop` 幂等（本来没运行也返回成功）。
+无窗口），返回 pid / logFile / serial 均正确；`android_emulator_stop` 幂等（**省略 serial** 且本来没运行时
+返回成功）。
+
+> v1.2.1 起幂等语义收窄：省略 serial 时仍幂等成功；但显式传一个**从没存在过**的 serial
+> 会返回 `DEVICE_NOT_RUNNING`。以前它对任意不存在的 serial 都报「已停止本会话 1 台模拟器」——
+> 一个什么都没做的假成功（真机双会话回归抓到）。
 
 复现命令（真机，需先有运行中的模拟器）：
 

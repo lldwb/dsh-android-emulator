@@ -76,6 +76,8 @@ const TOOL_CODES = Object.freeze({
     'DEVICE_BUSY',
     // v1.2.0：stop 的兜底 catch（进程树终止异常等）
     'INTERNAL',
+    // v1.2.1：显式 serial 既不在 adb devices、也不是本插件启动过的设备
+    'DEVICE_NOT_RUNNING',
   ],
   android_apk_install: [
     'OK',
