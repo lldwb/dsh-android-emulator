@@ -249,14 +249,14 @@ dsh --profile <你的profile> --dump-config | Select-String android-emulator
 
 所有工具的输出对象**前三个字段固定**为 `ok: boolean`、`code: string`、`message: string`。
 `code: "OK"` 表示成功；失败是 `ok:false` + 机器可读的 `code`（枚举见文末） + 一句人话 `message`。
-所有工具都接受可选的 `serial`，省略时使用模块级「当前设备」。
+所有工具都接受可选的 `serial`，省略时使用**本会话**的当前设备（v1.2.0 起按会话分区，见「多会话隔离」）。
 
 | 工具 | 参数 | 返回（除三件套外） |
 |---|---|---|
-| `android_status` | `{}` | `sdk{found,root,adb,emulator,avdmanager,sdkmanager}`、`avds[{name,target,abi,path}]`、`images[{package,api,tag,abi}]`、`device{serial,state,booted,avd,abis[]}`、`translation{bridge,version,enabled,kind,arm64,arm32,abilist64[],abilist32[]}`、`acceleration{ok,kind,raw}`、`suggestions[]` |
+| `android_status` | `{}` | `sdk{found,root,adb,emulator,avdmanager,sdkmanager}`、`avds[{name,target,abi,path,kind}]`（`kind`: `session-pinned` / `template`）、`images[{package,api,tag,abi}]`、`device{serial,state,booted,avd,abis[]}`、`translation{bridge,version,enabled,kind,arm64,arm32,abilist64[],abilist32[]}`、`acceleration{ok,kind,raw}`、`sessionKey`、`instances[{sessionKey,serial,avd,pid,booted,lastPackage}]`、`instanceLimit{count,max}`、`avdDisk{sessionAvdCount,totalGb,freeDiskGb}`、`suggestions[]` |
 | `android_avd_create` | `name?`、`image?`、`device?`、`force?` | `avd`、`image`、`created`、`command[]` |
-| `android_emulator_start` | `avd?`、`headless?`（默认 `true`）、`cold?`、`timeoutMs?`、`port?` | `serial`、`avd`、`pid`、`bootedInMs`、`logFile`、`translation{bridge,version,enabled,kind,arm64,arm32,abilist64[],abilist32[]}` |
-| `android_emulator_stop` | `serial?`、`all?` | `serial`、`stopped` |
+| `android_emulator_start` | `avd?`、`headless?`（默认 `true`）、`cold?`、`timeoutMs?`、`port?` | `serial`、`avd`、`pid`、`bootedInMs`、`logFile`、`translation{bridge,version,enabled,kind,arm64,arm32,abilist64[],abilist32[]}`、`sessionKey`、`createdAvd`（是否为本会话新建了专属 AVD） |
+| `android_emulator_stop` | `serial?`、`all?`（默认 `false`；`true`＝停止**本会话**全部）、`removeAvd?`（默认 `false`；`true`＝同时删除本会话专属 AVD 释放磁盘） | `serial`、`stopped` |
 | `android_apk_install` | `apk`（必填）、`serial?`、`grantPermissions?`（默认 `true`）、`reinstall?`（默认 `true`） | `package`、`versionName`、`versionCode`、`abis[]`、`deviceAbis[]`、`matchedAbi`、`abiKind`（`"native"` / `"translated"` / `"none"`）、`translation{bridge,version,enabled,kind,arm64,arm32,abilist64[],abilist32[]}`、`installedInMs`、`tips[]` |
 | `android_app_launch` | `package?`、`activity?`、`serial?`、`stopFirst?`、`settleMs?`（默认 `1400`） | `package`、`activity`、`pid` |
 | `android_app_stop` | `package`（必填）、`serial?` | `package` |
@@ -352,17 +352,169 @@ dsh --profile <你的profile> --dump-config | Select-String android-emulator
         emulatorArgs: []
         adbPath: ''
         emulatorPath: ''
+        perSession: true
+        maxInstances: 2
+        avdNamePrefix: ''
 ```
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | `sdkPath` | `''`（自动发现） | Android SDK 根目录；指向不存在的位置时继续按自动发现顺序找 |
-| `avdName` | `dsh_android` | 默认 AVD 名（`emulator_start` 不传 `avd` 时使用） |
+| `avdName` | `dsh_android` | 基础 AVD 名（`perSession: true` 时是会话专属 AVD 名的模板来源，见下） |
 | `outputDir` | `''` → `<tmp>/dsh-android-emulator` | 截图与模拟器日志的落盘目录，一定是绝对路径 |
 | `bootTimeoutMs` | `240000` | 等 `sys.boot_completed=1` 的超时；超时返回 `BOOT_TIMEOUT` 并 kill 进程 |
 | `emulatorArgs` | `[]` | 追加给 `emulator` 的额外参数（如 `-gpu host`、`-memory 4096`） |
 | `adbPath` | `''` | 覆盖 `adb.exe` 路径（SDK 结构非标准时用） |
 | `emulatorPath` | `''` | 覆盖 `emulator.exe` 路径 |
+| `perSession` | `true` | `true`＝每会话独立模拟器与状态（v1.2.0 默认）；`false`＝全部会话共享一台（v1.1 行为），见「多会话隔离」 |
+| `maxInstances` | `2` | `perSession: true` 时同时运行的模拟器上限（钳制 1–8）。到上限后 `emulator_start` 返回 `DEVICE_BUSY` |
+| `avdNamePrefix` | `''` | 会话专属 AVD 名的前缀；空则用 `avdName`。最终形如 `<前缀>--<sessionShort>` |
+
+## 多会话隔离（v1.2.0）
+
+### 一句话
+
+**从 v1.2.0 起，默认每个会话有自己的一台模拟器和独立的运行状态。**
+A 会话装包、点击、甚至 `android_emulator_stop`，都不会影响 B 会话正在用的设备。
+
+> v1.1 及以前不是这样：`lib/state.mjs` 是模块级单例，一个 Host 进程里的所有会话**共享**同一台
+> 设备——A 启动的设备会被 B 的 screenshot/tap 直接操作，A 装的包会被 B 的 `app_launch` 默认启动。
+> 那时的「当前设备」是全局的。
+
+### 机制
+
+```text
+execute(args, exec) 的 exec.agent.id  = SessionId
+        ↓
+sessionKey = exec.agent?.id ?? 'shared-default'
+        ↓
+┌───────────────────────┬─────────────────────────┐
+│ 状态分区              │ 设备隔离                │
+│ getCurrent(key)       │ 每会话专属 AVD          │
+│ rememberPackage(key, …)│ <prefix>--<sessionShort>│
+│ 进程记录带 sessionKey │ 独立端口 5554 + 2*slot  │
+└───────────────────────┴─────────────────────────┘
+```
+
+- **`sessionKey`**：来自 `exec.agent.id`（dsh 的 `Agent` 接口就是 `{ readonly id: SessionId }`）。
+  没有 agent 上下文时（例如脚本直接调 `execute`）落到 `'shared-default'` 共享槽。
+- **状态分区**：当前设备、最近安装的包都按 `sessionKey` 存；进程表仍按 serial 索引，但每条记录带
+  `sessionKey` 用于归属判定。
+- **专属 AVD**：名字是 `<avdNamePrefix 或 avdName>--<sessionShort>`。
+  `sessionShort` = sessionKey 里非 `[A-Za-z0-9_-]` 的字符换成 `_`，再取前 8 个字符
+  （session id 可能很长/带 uuid/全角字符，必须清洗后才能当 AVD 名）。**注意**：真实 dsh
+  SessionId 形如 `session-<uuid>`，前 8 字符恒为通用前缀 `session-`；这种「截断点落在分隔符上」
+  的情况会改取可辨识段（`session-9e1ca070-…` → `9e1ca070`），否则所有会话会撞成同一个 AVD 名。
+  第一次启动时若不存在就用 `avdmanager create avd` 从**同一个** system-image + device 配置建出来，
+  并在返回值里 `createdAvd: true` 告诉你这件事。
+- **独立端口**：从 `5554` 起按 slot 分配 `5554 + 2*slot`，被占用就顺延；启动前用 `adb devices` 校验。
+
+### ⚠️ 资源代价（必须先算账，按实测）
+
+隔离不是免费的。**每台会话模拟器实测**（`dsh_android.avd` 拆开看，2026-10-26）：
+
+| 资源 | 开销 |
+|---|---|
+| 磁盘 | **≈ 4–6.5 GB**（其中 `userdata-qemu.img.qcow2` ≈ 3.9 GB，`snapshots/default_boot/ram.img` ≈ 2.5 GB） |
+| 内存（RAM） | **≈ 2 GB**（运行中） |
+| 启动时间 | **40–90 秒**（无快照冷启动；实测本机 38.2 s） |
+
+所以 `maxInstances` 默认是 **2**——两个会话同时各起一台，就是 **≈ 8–13 GB 磁盘 + 4 GB RAM**。
+本机磁盘只剩 25.7 GB 时，两台就把可用空间压低到 20 GB 以下，很容易在装大 APK 时失败。
+
+`android_status` 现在会返回 `avdDisk` 帮你监控：
+
+```jsonc
+"avdDisk": {
+  "sessionAvdCount": 2,   // 会话专属 AVD（<prefix>--*）的数量
+  "totalGb": 11.3,        // 这些 AVD 合计占多少 GB
+  "freeDiskGb": 25.7      // 磁盘剩余 GB
+}
+```
+
+`suggestions[]` 在剩余磁盘 < 8 GB 时会提示清理。
+
+调小上限或按需临时调大：
+
+```yaml
+maxInstances: 1     # 严格串行：第二个会话会拿 DEVICE_BUSY
+```
+
+> 会话 AVD 统一用 `-no-snapshot` 启动（**不生成**那 2.5 GB 的 `ram.img` 快照）。
+> 代价是每次都要走**无快照冷启动**（38.2 s 左右），换来的是每台省下 2.5 GB 磁盘。
+> 如果你看到某台 AVD 里仍有 `snapshots/default_boot/ram.img`，那是 v1.1 时期留下的旧 AVD，
+> 按下面的清理方法删掉重建即可。
+
+### 超限 / 跨会话时的行为
+
+| 场景 | 返回 |
+|---|---|
+| 已达 `maxInstances`，本会话还要再起一台 | `ok:false, code:"DEVICE_BUSY"`，`message` 列出当前占用者（`sessionKey` 前 8 字符 + serial）并给出下一步（停别的会话 / 调大 `maxInstances`） |
+| 显式传的 `serial` 属于**别的会话** | `ok:false, code:"DEVICE_BUSY"`，`message` 说明归属 |
+| `android_emulator_stop` 的 `serial` 属于别的会话 | 同上，**不会静默停别人的设备** |
+
+设计原则是 **绝不静默跨会话操作**：宁可返回 `DEVICE_BUSY` 让 agent 明确知道"这台不是我该动的"，
+也不要在别人的设备上点一下。想跨会话协作就显式把 `perSession` 关掉（见下）。
+
+### 想退回共享模式（v1.1 行为）
+
+```yaml
+perSession: false
+```
+
+好处是省资源（一台设备所有会话共用，启动一次就行）。**风险必须说清楚**：
+
+- **会话之间会互相干扰**——A 的点击/装包/停设备会直接作用在 B 正在用的设备上；
+- A 调 `android_emulator_stop` 会停掉 B 正在用的模拟器；
+- 两个会话同时操作同一界面时，UI 状态会打架（谁点的都算），断言可能莫名其妙地失败；
+- 状态仍然按 sessionKey 分区，但**只有 `shared-default` 槽被使用**，所以 `getCurrent()` 之类的
+  分区语义在共享模式下没有实际隔离效果。
+
+只在「我就是想省一台模拟器」且愿意接受互相干扰时用它。
+
+### 清理（会话 AVD 很占磁盘，要主动清）
+
+一台会话 AVD 就是 4–6.5 GB，跑过几次实验后很容易堆到几十 GB。
+
+**1) 删掉本会话的专属 AVD（推荐）**
+
+```text
+android_emulator_stop { "removeAvd": true }
+```
+
+`removeAvd` 默认 `false`（只停设备、保留 AVD）；传 `true` 会**删除本会话**的专属 AVD，
+释放约 4–6 GB。它**只删本会话自己的**（`<prefix>--<sessionShort>`），不会碰别人的、也不会碰
+基础模板 AVD。
+
+「设备已经停了、但 AVD 还在」的情况也支持：此时 `android_emulator_stop { "removeAvd": true }`
+停在早退分支（`message` 说「没有运行中的模拟器，不需要停止」），但仍会**执行删除**并报告释放空间，
+所以不用为了回收磁盘先起一台设备。
+
+**2) 手工查看 / 清理**
+
+先看 `android_status` 的 `avdDisk`（`sessionAvdCount` / `totalGb` / `freeDiskGb`），再决定要不要清：
+
+```powershell
+# 列出所有会话专属 AVD（<prefix>--*）
+Get-ChildItem "$env:USERPROFILE\.android\avd" -Directory | Where-Object Name -like 'dsh_android--*'
+
+# 看某一个占多少
+'{0:N2} GB' -f ((Get-ChildItem "$env:USERPROFILE\.android\avd\dsh_android--abc12345.avd" -Recurse |
+    Measure-Object Length -Sum).Sum / 1GB)
+
+# 删掉（用 avdmanager，别手删目录——.ini 会残留）
+& "$env:LOCALAPPDATA\Android\Sdk\cmdline-tools\latest\bin\avdmanager.bat" delete avd -n 'dsh_android--abc12345'
+
+# 或者直接用主机 adb 停设备
+adb devices
+adb -s emulator-5554 emu kill
+```
+
+> 注意 `android_emulator_stop { "all": true }` 只停**本会话**的全部设备（v1.2.0 语义变化，
+> v1.1 时 `all` 是"所有设备"）。想清别的会话留下的东西只能回命令行。
+>
+> 插件**不会自动删除** AVD（删错会毁掉别人的环境）；它只保证不会去抢别人的设备，
+> 以及在你显式要求 `removeAvd: true` 时清掉自己的。
 
 ## 设计要点
 
@@ -380,6 +532,12 @@ dsh --profile <你的profile> --dump-config | Select-String android-emulator
   所以没有这个坑；**但如果你手工用 adb 验证，请用 `cmd /c` 的重定向（二进制安全）或 `adb pull`**。
 - **稳定性**：所有外部命令都有超时；子进程 spawn 被权限策略拦下时归一为 `SPAWN_DENIED`
   而不是让整个工具调用崩掉。
+- **会话 AVD 不带快照**：`perSession: true` 时会话专属 AVD 统一加 `-no-snapshot` 启动。
+  代价是每次走无快照冷启动（实测 38.2 s），换来每台省下约 2.5 GB 的
+  `snapshots/default_boot/ram.img`。手工 debug 时如果想快一点，可以自己用
+  `emulator -avd <name>` 带快照启动——但插件后续调用仍然只认 `adb devices` 里的 serial。
+- **跨会话绝不静默操作**：任何工具在「显式给了 `serial`、但该 serial 属于别的会话」时返回
+  `DEVICE_BUSY` 并说明归属。这是 v1.2.0 的硬约束，不是可以绕过的提示。
 
 ## 限制与已知问题
 

@@ -1,7 +1,7 @@
 {
   "name": "dsh-android-emulator",
-  "version": "1.1.2",
-  "description": "让 dsh agent 自己启动 Android 模拟器、安装 APK（含 ARM64 包走镜像内置 libndk_translation 转译）、点击/滑动/输入、看截图与 UI 树和 logcat —— 「改代码 → 装包 → 操作 → 断言」的闭环。零依赖 Host 插件。",
+  "version": "1.2.0",
+  "description": "让 dsh agent 自己启动 Android 模拟器、安装 APK（含 ARM64 包走镜像内置 libndk_translation 转译）、点击/滑动/输入、看截图与 UI 树和 logcat —— 「改代码 → 装包 → 操作 → 断言」的闭环。多会话默认隔离（每个会话一台独立模拟器 + 专属 AVD，maxInstances 保护磁盘）。零依赖 Host 插件。",
   "type": "module",
   "license": "MIT",
   "private": true,

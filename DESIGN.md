@@ -35,10 +35,10 @@
 
 | 工具 | 参数 | 输出（除三件套外的字段） |
 |---|---|---|
-| `android_status` | `{}` | `sdk{found,root,adb,emulator,avdmanager,sdkmanager}`、`avds[{name,target,abi,path}]`、`images[{package,api,tag,abi}]`、`device{serial,state,booted,avd,abis[]}`、`translation{bridge,version,enabled,kind,arm64,arm32,abilist64[],abilist32[]}`、`acceleration{ok,kind,raw}`、`suggestions[]` |
+| `android_status` | `{}` | `sdk{found,root,adb,emulator,avdmanager,sdkmanager}`、`avds[{name,target,abi,path,kind}]`（`kind`: `session-pinned` / `template` / `other`）、`images[{package,api,tag,abi}]`、`device{serial,state,booted,avd,abis[]}`、`translation{...}`、`acceleration{ok,kind,raw}`、`sessionKey`、`instances[{sessionKey,serial,avd,pid,booted,lastPackage}]`、`instanceLimit{count,max}`、`avdDisk{sessionAvdCount,totalGb,freeDiskGb}`、`suggestions[]` |
 | `android_avd_create` | `name?`、`image?`、`device?`、`force?` | `avd`、`image`、`created`、`command[]` |
-| `android_emulator_start` | `avd?`、`headless?`(默认 true)、`cold?`、`timeoutMs?`、`port?` | `serial`、`avd`、`pid`、`bootedInMs`、`logFile`、`translation{bridge,version,enabled,kind,arm64,arm32,abilist64[],abilist32[]}` |
-| `android_emulator_stop` | `serial?`、`all?` | `serial`、`stopped` |
+| `android_emulator_start` | `avd?`、`headless?`(默认 true)、`cold?`、`timeoutMs?`、`port?` | `serial`、`avd`、`pid`、`bootedInMs`、`logFile`、`translation{...}`、`sessionKey`、`createdAvd`(是否为本会话新建了专属 AVD) |
+| `android_emulator_stop` | `serial?`、`all?`(默认 false；true=停止**本会话**全部)、`removeAvd?`(默认 false；true=同时删除本会话专属 AVD) | `serial`、`stopped`、`removedAvd`(被删除的 AVD 名，未删为空串) |
 | `android_apk_install` | `apk`(必填)、`serial?`、`grantPermissions?`(默认 true)、`reinstall?`(默认 true) | `package`、`versionName`、`versionCode`、`abis[]`、`deviceAbis[]`、`matchedAbi`、`abiKind`(`"native"` / `"translated"` / `"none"`)、`translation{bridge,version,enabled,kind,arm64,arm32,abilist64[],abilist32[]}`、`installedInMs`、`tips[]` |
 | `android_app_launch` | `package?`、`activity?`、`serial?`、`stopFirst?`、`settleMs?`(默认 1400，0=立刻返回) | `package`、`activity`、`pid` |
 | `android_app_stop` | `package`(必填)、`serial?` | `package` |
@@ -135,12 +135,15 @@ findNodes(nodes, { text, resourceId, contentDesc, className, exact? }) => nodes[
 
 ```yaml
 sdkPath: '%LOCALAPPDATA%\Android\Sdk'   # 省略则自动发现
-avdName: 'dsh_android'
+avdName: 'dsh_android'                   # 基础 AVD 名（perSession 时是模板来源）
 outputDir: ''                            # 省略 → <tmp>/dsh-android-emulator
 bootTimeoutMs: 240000
 emulatorArgs: []                         # 额外 emulator 参数
 adbPath: ''                              # 覆盖
 emulatorPath: ''                         # 覆盖
+perSession: true                         # true=每会话独立模拟器（默认，见 §7.2）；false=全部会话共享一台（v1.1 行为）
+maxInstances: 2                          # perSession 时同时运行的模拟器上限
+avdNamePrefix: ''                        # 会话专属 AVD 名前缀；空则用 avdName
 ```
 
 自动发现顺序：`config.sdkPath` → `%ANDROID_HOME%` → `%ANDROID_SDK_ROOT%` →
@@ -212,7 +215,63 @@ emulatorPath: ''                         # 覆盖
   Capacitor/WebView 冷启动要 3–5 s 才渲染，launch 后立刻 `android_screenshot` 会拿到**白屏 PNG**
   （有效但全白），agent 会误判应用异常。message 里必须提示"若截图仍白屏，等 2–3 秒再截一次"。
 - 所有对外路径用**绝对路径**（agent 的 read_image 需要）。
-- 模块级状态集中在 `lib/state.mjs`，用函数读写（`getCurrent()`, `setCurrent()`），方便测试注入。
+- 模块级状态集中在 `lib/state.mjs`，用函数读写，方便测试注入；**从 v1.2.0 起按会话分区**（见 §7.2）。
+
+### 7.2 多会话隔离（v1.2.0 新增）
+
+**问题**：DSH 的一个 Host 进程里可以同时开多个会话，而插件模块是**单实例**（模块级状态）。
+v1.1 的状态是全局的（`let current` / `Map processes` / `lastPackage`），所以两个会话会互相干扰：
+A 启动的设备会被 B 的 screenshot/tap 直接操作、A 装的包会被 B 的 `app_launch` 默认启动、
+A 调 `emulator_stop` 会停掉 B 正在用的设备。
+
+**会话标识**：工具 `execute(args, exec)` 的 `exec.agent?.id` 就是 SessionId
+（dsh 的 `Agent` 接口即 `{ readonly id: SessionId }`，见 `packages/core/agent/src/types.ts`）。
+`sessionKey = exec.agent?.id ?? 'shared-default'`（无 agent 上下文 → 共享槽，兼容脚本直调）。
+
+**状态分区**：`lib/state.mjs` 全部改为按 sessionKey 索引：
+- `getCurrent(key)` / `setCurrent(key, patch)` / `clearCurrent(key)`
+- `rememberPackage(key, pkg)` / `getLastPackage(key)`
+- 进程表仍按 serial 索引，但每条记录带 `sessionKey`（用于归属判定与 `instances` 展示）
+
+**设备隔离（`perSession: true`，默认）**：
+1. `android_emulator_start` 先查**本会话**的 current 设备是否仍在线 → 在线则复用（`createdAvd:false`）。
+2. 否则确保**本会话专属 AVD** 存在：名字 `<avdNamePrefix|avdName>--<sessionShort>`，
+   `sessionShort` = sessionKey 清洗（非 `[A-Za-z0-9_-]` → `_`）后前 8 字符；**但截断点落在
+   分隔符上时必须改取可辨识段** —— 真实 dsh SessionId 是 `session-<uuid>`，前 8 字符恒为
+   `session-`，直接用会让所有会话撞成同一个 AVD 名（多会话隔离彻底失效）。实现见
+   `lib/state.mjs#sessionShort`：按分隔符切段、剥掉 `session`/`agent` 等通用词、取第一段
+   （`session-9e1ca070-…` → `9e1ca070`），没有可辨识段时用 8 位哈希兜底。不存在则用
+   `avdmanager create avd` 从同一 system-image + 同一 device 配置创建（`createdAvd:true`）。
+3. 端口：从 5554 起按 slot 分配（`5554 + 2*slot`），被占则顺延；启动前用 `adb devices` 校验。
+4. **实例上限**：同时运行的模拟器数 ≥ `maxInstances`（默认 2）→ 返回 `DEVICE_BUSY`，
+   message 列出当前占用者（sessionKey 前 8 字符 + serial）并给下一步（停别的会话 / 调大 maxInstances）。
+5. `android_emulator_stop` **只停本会话**的设备。给了 `serial` 但它属于别的会话 → `DEVICE_BUSY`
+   并说明归属（**不静默停别人的设备**）。`all:true` 也只停本会话的全部。
+6. `perSession: false` → 退回 v1.1 的共享行为（状态仍按会话分区，但只有 `shared-default` 槽被使用）。
+
+**绝不静默跨会话操作**：任何工具在「显式给了 serial、但该 serial 不属于本会话」时，
+必须返回 `DEVICE_BUSY` 并说明归属，而不是直接操作。
+
+### 7.3 磁盘预算与回收（v1.2.0 实测）
+
+每台模拟器的真实磁盘占用远大于 system image 本身（2026-10-26 实测，单 AVD 6.52 GB）：
+
+```
+userdata-qemu.img.qcow2        3.93 GB   ← data partition 6GB 的 qcow2，随安装/运行增长
+snapshots/default_boot/ram.img 2.50 GB   ← 快照 RAM 镜像（firstboot.saveToLocalSnapshot=yes）
+```
+
+因此：
+
+- **会话 AVD 启动一律加 `-no-snapshot`**（在 `-no-snapshot-save` 之外）：不需要快照加速
+  （冷启动 40–75 s 可接受），避免每台多出 ~2.5 GB 的 `ram.img`。
+- `maxInstances` 默认 2 是硬保护：两台 ≈ 8–13 GB；不要调到 8 以上除非磁盘充裕。
+- `android_emulator_stop { removeAvd: true }` 删除**本会话**专属 AVD（释放 4–6 GB）。
+  设备已经停止时同样生效（早退分支也必须执行删除，否则「先 stop 再 stop{removeAvd}」回收不了磁盘）。
+- `android_status.avdDisk` 暴露 `{ sessionAvdCount, totalGb, freeDiskGb }`；
+  `freeDiskGb < 8` 时 `suggestions[]` 必须给一条清理建议。
+- `android_emulator_start` 在磁盘余量 < 8 GB 时**不失败**，只在 message 尾部附警示（`ok` 仍 true）。
+- 手工清理：`~/.android/avd/` 下形如 `<prefix>--<sessionShort>.avd` 的目录即会话 AVD。
 
 ## 8. 验收标准（端到端，Lead 执行）
 
@@ -227,14 +286,19 @@ emulatorPath: ''                         # 覆盖
    必须是 `"ndk-translation"`、`matchedAbi` 必须是 `arm64-v8a`。
 4. `android_status` 必须能报告 `translation`（本机实测：`bridge=libndk_translation.so`、
    `version=0.2.3`、`arm64=true`、`arm32=false`）。
-4. GitHub：私有仓库 `lldwb/dsh-android-emulator`，`gh repo view --json visibility` = `PRIVATE`，`git status` 无 ahead/behind。
-5. 版本：`package.json` 的 `version` 在首次提交即为 `1.0.0`；之后任何改动升版并在同一次提交。
+5. **多会话隔离（v1.2.0 追加）**：用两个不同的 `exec.agent.id` 各调一遍 `android_status` /
+   `android_emulator_start`，断言 (a) 两边 `sessionKey` 不同；(b) 自己的 `serial` 只出现在自己的
+   `instances` 里；(c) 用一个会话的 serial 在另一个会话里调 `android_screenshot` 得到 `DEVICE_BUSY`；
+   (d) 实例数达 `maxInstances` 后 `android_emulator_start` 返回 `DEVICE_BUSY`。
+6. 仓库：**公开（MIT）**，`gh repo view --json visibility` = `PUBLIC`；`git status` 无 ahead/behind。
+7. 版本：`package.json` 的 `version` 首次提交为 `1.0.0`；之后任何改动升版并在同一次提交。
 
 ## 9. 明确不做
 
 - 不做 UI 设置页（零依赖省掉 schemastery；配置走 patch）。
 - 不做中文文本输入（Android `input text` 无此能力；不引入 ADBKeyboard）。
-- 不做多设备并行编排（一次一台；`serial` 参数为将来留口）。
+- **同一会话内一次一台**；跨会话可以并行，但受 `perSession` 与 `maxInstances` 约束（见 §7.2）。
+  不在单个会话里做多设备编排——多设备矩阵是下一层的事，v1.x 不做。
 - **不自己塞 ARM 转译层**（v1.1.0 结论）：官方 `x86_64` 系统镜像**已内置** Google 的
   `libndk_translation`（arm64 转译），插件只负责**探测/报告/利用**，不往镜像里注入 .so。
 - **不支持 32 位 ARM（`armeabi-v7a`-only）**：官方镜像生态没有 32 位转译层，也没有可在 x86_64
