@@ -279,6 +279,29 @@ test('DEVICE_BUSY 守卫：未登记的 serial 走 DEVICE_NOT_RUNNING（不是�
   });
 });
 
+test('emulator_stop：对「从未存在过」的 serial 必须报 DEVICE_NOT_RUNNING，不能伪造「已停止 1 台」', async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'dsh-v12-stopghost-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  await withFakeAdbDevices(directory, async (config) => {
+    const tools = await loadToolDefinitions(config);
+    state.resetState();
+    const definition = tools.get('android_emulator_stop');
+
+    // 回归用例（真机双会话 e2e 抓到）：A 会话启动超时后 state.deleteProcess 会清掉归属
+    // 记录，此时 B 传 A 的已死 serial，旧实现既没被 DEVICE_BUSY 拦住、又打出
+    // 「已停止本会话 1 台模拟器」——一个纯粹伪造的成功。现在必须明确 DEVICE_NOT_RUNNING。
+    const value = await definition.execute({ serial: 'emulator-9998' }, { agent: { id: B } });
+    assert.equal(value.ok, false, `不应报告成功：${JSON.stringify(value).slice(0, 300)}`);
+    assert.equal(value.code, 'DEVICE_NOT_RUNNING', `应为 DEVICE_NOT_RUNNING，实际 ${value.code}`);
+    assert.deepEqual(
+      validateToolOutput(definition.output.schema, value),
+      [],
+      '失败分支的返回值也必须满足 output.schema',
+    );
+  });
+});
+
 /* ------------------------------------------------------------------ *
  * 3. maxInstances 钳制与 perSession
  * ------------------------------------------------------------------ */
