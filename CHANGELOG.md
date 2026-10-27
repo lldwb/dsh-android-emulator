@@ -5,6 +5,13 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.2] - 2026-10-27
+
+### 变更
+
+- 插件图标换成 gpt-image-2.5 生成的 PNG 图标（256×256，圆角透明）：`icon.svg` → `icon.png`，
+  `package.json` 的 `icon` 与 `files` 同步更新。纯资源与清单改动，不涉及代码逻辑。
+
 ## [1.2.1] - 2026-10-26
 
 ### 修复（多会话并发场景下的四个真实缺陷，均由双会话真机回归暴露）
