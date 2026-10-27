@@ -81,12 +81,12 @@
     tools/device.mjs    # android_status/avd_create/emulator_start/emulator_stop/apk_install/app_launch/app_stop/logcat
     tools/interact.mjs  # android_ui_dump/tap/swipe/input/key/wait/screenshot
   locale/{zh,en}.json   # 卡片标题/描述（plugin-impl）
-  icon.svg              # 原始图标（plugin-impl）
+  icon.png              # 原始图标（plugin-impl）
   README.md / CHANGELOG.md / .gitignore   # plugin-qa
   test/**               # plugin-qa
 ```
 
-**写作用域互斥**：`plugin-impl` 拥有 `package.json / cordis.patch.yml / index.js / lib/** / locale/** / icon.svg`；
+**写作用域互斥**：`plugin-impl` 拥有 `package.json / cordis.patch.yml / index.js / lib/** / locale/** / icon.png`；
 `plugin-qa` 拥有 `test/** / README.md / CHANGELOG.md / .gitignore`；Lead 拥有 `DESIGN.md` 与最终 `package.json` 的 version 字段。
 谁都不改别人的文件；需要对方改，发消息。
 
