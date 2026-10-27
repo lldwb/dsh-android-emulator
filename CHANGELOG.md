@@ -5,6 +5,14 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.3] - 2026-10-27
+
+### 变更
+
+- 插件图标改为手绘 SVG，对齐 dsh 官方插件图标的矢量语言（36×36、透明底、官方蓝色渐变、同一描边与留白）：
+  `icon.png` → `icon.svg`，`package.json` 的 `icon` 与 `files`、`DESIGN.md` 的写作用域说明同步更新。
+  纯资源与文档改动，不涉及代码逻辑。
+
 ## [1.2.2] - 2026-10-27
 
 ### 变更
