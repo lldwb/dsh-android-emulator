@@ -627,6 +627,23 @@ Capacitor / Cordova / 任何 WebView 应用的**页面 DOM 对 uiautomator 不�
 | 沙箱 | `devkit_sandbox_*` 装进 headless profile 并真实调用 | 插件在真实 Loader 里能激活、行进合成树、工具在真实注册表里可用、返回值过运行时校验 |
 | 真机端到端 | `node test/e2e-real.mjs`（可加 `--start`/`--apk`/`--package`） | 真模拟器上的完整链路：status → emulator_start → apk_install → app_launch → ui_dump → ui_tap → screenshot |
 
+### 适配与沙箱复核（DSH 0.2.2-rc.1，2026-11-06）
+
+0.2.2-rc.1 对本插件**无代码改动需求**：插件只用 `ctx.tools.register` + `ctx.effect`（Cordis
+公开 API），工具 schema 仍是手写的严格 JSON Schema 子集，返回值运行时校验路径未变 —— 15 个工具
+的注册与调用在真实 Loader 里复核通过。
+
+| 步 | 结果 |
+|---|---|
+| `devkit_sandbox_create` / `install`（`android-emulator-regress`，headless） | exit 0（`dsh-android-emulator@1.2.4` 链入沙箱 profile） |
+| `devkit_sandbox_compose { grep: "android-emulator" }` | 合成树出现 `# == dsh-android-emulator` / `- id: android-emulator` / `name: dsh-android-emulator` |
+| `devkit_sandbox_run`（「调用 android_status（无参数），把原始输出逐字贴出来」） | **exit 0，工具真的被调用**：SDK `C:\Users\32471\Android\Sdk`、无 AVD、1 个 x86_64 系统镜像、本会话 0 台设备、`whpx` 可用；**无 `did not activate`、无 `tool returned invalid output`** |
+
+> 沙箱任务里的"JSON"只是让模型把原始输出吐出来的说法；`android_status` 实际返回人类可读文本，
+> 所以模型贴的就是文本原文。关键点在于：**工具在真实注册表里可调用、返回值过运行时校验**。
+
+单测：`node --test "test/**/*.test.mjs"` → **184 pass / 0 fail**（与 0.2.2 之前一致）。
+
 ### 实测结果（2026-10-24，Windows 11 / AMD Ryzen AI 9 H 365 / 30.8 GB RAM / Hyper-V 开启）
 
 **① 单测**（`npm test`，全离线，不连模拟器、不联网）

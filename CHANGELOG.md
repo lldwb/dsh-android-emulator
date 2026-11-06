@@ -5,6 +5,22 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.4] - 2026-11-06
+
+### 变更
+
+适配 DSH `0.2.2-rc.1`（**无代码改动**：插件只用 `ctx.tools.register` + `ctx.effect` 这组 Cordis
+公开 API，工具 schema 仍是手写严格 JSON Schema 子集，返回值校验路径未变）。
+
+### 验证
+
+- 真实 Loader 沙箱回归（devkit headless `android-emulator-regress`）：`create`/`install` exit 0 →
+  `compose` 合成树出现 `- id: android-emulator` / `name: dsh-android-emulator` →
+  `devkit_sandbox_run`（「调用 android_status（无参数）并逐字贴出原始输出」）**exit 0**，
+  工具在真实注册表里被调用，返回 SDK `C:\Users\32471\Android\Sdk`、无 AVD、本会话 0 台设备、
+  `whpx` 可用，**无 `tool returned invalid output`**。
+- 单测：`node --test "test/**/*.test.mjs"` → **184 pass / 0 fail**。
+
 ## [1.2.3] - 2026-10-27
 
 ### 变更
