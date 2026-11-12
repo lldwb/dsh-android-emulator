@@ -5,6 +5,15 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.6] - 2026-11-12
+
+### 文档
+
+修正 1.2.5 提交里 `test/e2e-real.mjs` 头部注释的格式笔误（新增说明与原有「为什么单独放一个
+文件」之间漏了一个 `*` 空行，渲染成 `* * 为什么…`）。纯注释改动，行为不变。
+
+单测：`node --test "test/**/*.test.mjs"` → 184 pass / 0 fail；裸跑 `node --test` → 188 pass / 0 fail。
+
 ## [1.2.5] - 2026-11-12
 
 ### 修复
