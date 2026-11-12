@@ -644,6 +644,27 @@ Capacitor / Cordova / 任何 WebView 应用的**页面 DOM 对 uiautomator 不�
 
 单测：`node --test "test/**/*.test.mjs"` → **184 pass / 0 fail**（与 0.2.2 之前一致）。
 
+### 适配与沙箱复核（DSH 0.2.2-rc.2，2026-11-12）
+
+0.2.2-rc.2 对本插件**无代码改动需求**（插件只用 `ctx.tools.register` + `ctx.effect` 这组
+Cordis 公开 API；rc.2 的 `Session.append` 重载、runtime-context 提醒包装、附件错误码等
+破坏面均未涉及）。本轮修了一个**测试口径**问题：
+
+- 现象：裸跑 `node --test`（不带 glob）时报告 **1 个失败**，失败项是 `test\e2e-real.mjs`。
+- 根因：Node 22 的测试运行器在裸跑时会把 `test/` 下**所有** `.mjs` 当测试文件（含手动
+  e2e 脚本）；本机有 SDK（`C:\Users\32471\Android\Sdk`）但没有运行中的模拟器，脚本的
+  关键步骤 `android_ui_dump` 返回 `DEVICE_NOT_RUNNING` → 脚本按设计退出 1，被误报成单测失败。
+- 修复：`test/e2e-real.mjs` 检测测试运行器上下文（`NODE_TEST_CONTEXT`）时自行跳过并打印
+  提示；手动执行（`node test/e2e-real.mjs`）行为不变。规范跑法仍是
+  `node --test "test/**/*.test.mjs"`（184 pass / 0 fail）；裸跑 `node --test` 现在也全绿
+  （188 pass / 0 fail，多出的 4 项是 `test/helpers/*.mjs` 与自行跳过的 e2e 脚本）。
+
+| 步 | 结果 |
+|---|---|
+| `devkit_sandbox_create` / `install`（`a-android-emulator-regress`，headless） | exit 0（`dsh-android-emulator@1.2.5` 链入沙箱 profile） |
+| `devkit_sandbox_compose { grep: "android-emulator" }` | 合成树出现 `# == dsh-android-emulator` / `- id: android-emulator` / `name: dsh-android-emulator` |
+| `devkit_sandbox_run`（「调用 android_status（无参数），把原始输出逐字贴出来」） | **exit 0，工具真的被调用**：SDK `C:\Users\32471\Android\Sdk`、无 AVD、1 个 x86_64 系统镜像、本会话 0 台设备、`whpx` 可用；**无 `did not activate`、无 `tool returned invalid output`** |
+
 ### 实测结果（2026-10-24，Windows 11 / AMD Ryzen AI 9 H 365 / 30.8 GB RAM / Hyper-V 开启）
 
 **① 单测**（`npm test`，全离线，不连模拟器、不联网）

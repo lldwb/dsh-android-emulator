@@ -5,6 +5,29 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.5] - 2026-11-12
+
+### 修复
+
+裸跑 `node --test`（不带 glob）时误报 1 个单测失败：Node 22 的测试运行器会把 `test/` 下
+**所有** `.mjs` 当测试文件执行，手动 e2e 脚本 `test/e2e-real.mjs` 也被加载；本机有 SDK
+但没有运行中的模拟器，其关键步骤 `android_ui_dump` 返回 `DEVICE_NOT_RUNNING`，脚本按设计
+退出 1，被测试运行器报成 `test\e2e-real.mjs` 失败。
+
+- `test/e2e-real.mjs` 检测测试运行器上下文（`NODE_TEST_CONTEXT`）时自行跳过并打印提示；
+  手动执行（`node test/e2e-real.mjs`）行为不变。
+- 规范跑法不变：`node --test "test/**/*.test.mjs"` → 184 pass / 0 fail；裸跑
+  `node --test` 现在也全绿（188 pass / 0 fail，多出的是 `test/helpers/*.mjs` 与自行跳过的 e2e 脚本）。
+
+### 验证
+
+- 适配 DSH `0.2.2-rc.2`：插件无代码改动需求（只用 `ctx.tools.register` + `ctx.effect`，
+  rc.2 的 `Session.append` 重载 / runtime-context 提醒包装 / 附件错误码等破坏面均未涉及）。
+- 真实 Loader 沙箱回归（devkit headless `a-android-emulator-regress`）：`create`/`install` exit 0 →
+  `compose` 合成树出现 `- id: android-emulator` → `devkit_sandbox_run`（「调用 android_status
+  （无参数）并逐字贴出原始输出」）**exit 0**，工具在真实注册表里被调用、返回值过运行时校验，
+  **无 `tool returned invalid output`**。
+
 ## [1.2.4] - 2026-11-06
 
 ### 变更

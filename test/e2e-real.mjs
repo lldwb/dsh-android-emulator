@@ -2,7 +2,10 @@
 /**
  * 真机端到端回归脚本（**不**纳入 `node --test` 的 glob）。
  *
- * 为什么单独放一个文件：它需要真实的 Android SDK + 一个能启动的 x86_64 AVD，跑一次要几分钟；
+ * 注意：裸跑 `node --test`（不带 glob）时 Node 22 会把 `test/` 下所有 `.mjs` 当测试文件，
+ * 本脚本也会被加载 —— 检测到测试运行器上下文会**自行跳过**（见下方 `UNDER_TEST_RUNNER`），
+ * 避免「缺模拟器 → 退出 1」被误报成单测失败。
+ * * 为什么单独放一个文件：它需要真实的 Android SDK + 一个能启动的 x86_64 AVD，跑一次要几分钟；
  * 而 `node --test` 必须离线全绿（README 里承诺「不因缺少模拟器/网络而失败」）。所以契约的
  * 端到端链路（DESIGN §8 第 3 条）作为这个可手动执行的脚本存在，交给 Lead 或人在真机上跑。
  *
@@ -23,6 +26,15 @@ import path from 'node:path';
 import process from 'node:process';
 
 import { TOOL_NAMES, loadPlugins } from './helpers/plugin.mjs';
+
+// 是否被 `node --test`（**不带** glob）当作测试文件加载。
+//
+// 本脚本是手动真机 e2e：需要真实 SDK + 一台运行中的模拟器，缺环境时按设计退出 1。
+// 而 Node 22 的测试运行器在裸跑 `node --test` 时会把 `test/` 下**所有** `.mjs` 当测试文件
+// 执行（含本文件），退出 1 就会被报成「1 个单测失败」——2026-11-12 就因此误报过一次。
+// 检测到测试运行器上下文（`NODE_TEST_CONTEXT`）时直接跳过，保证两种跑法都全绿；
+// 单测仍用 npm test（等价于带 test 文件 glob 的 node --test），真机链路手动执行本脚本。
+const UNDER_TEST_RUNNER = process.env.NODE_TEST_CONTEXT !== undefined;
 
 /* ------------------------------------------------------------------ *
  * 参数解析（手写，零依赖）
@@ -326,11 +338,15 @@ async function main() {
   return 0;
 }
 
-main()
-  .then((code) => {
-    process.exitCode = code;
-  })
-  .catch((error) => {
-    console.error(`${RED}端到端脚本异常：${RESET}`, error);
-    process.exitCode = 1;
-  });
+if (UNDER_TEST_RUNNER) {
+  console.log('e2e-real.mjs：手动端到端脚本，测试运行器下跳过（单测请用 node --test "test/**/*.test.mjs"）');
+} else {
+  main()
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((error) => {
+      console.error(`${RED}端到端脚本异常：${RESET}`, error);
+      process.exitCode = 1;
+    });
+}
