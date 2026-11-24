@@ -11,6 +11,15 @@
 #   emulatorArgs: []
 #   adbPath: ''
 #   emulatorPath: ''
+#   perSession: true                         # v1.2.0：每会话独立模拟器
+#   maxInstances: 2                          # v1.2.0：同时运行的实例上限（1–8），保护磁盘
+#   avdNamePrefix: ''                        # v1.2.0：会话专属 AVD 名前缀，空则用 avdName
+#   onDemand: true                           # v1.3.0：按需门控（默认开）——15 个 android_* 工具
+#                                            #   平时不进模型工具表，模型加载本插件自带的
+#                                            #   `android-emulator` skill 后从下一步出现。
+#                                            #   设 false = 常驻（工具永远可见，1.2.x 的老行为）。
+#                                            #   没有 skill 工具的模式（minimal 等）自动 fail-open，
+#                                            #   保持常驻，不受本项影响。
 - insert:
     - id: android-emulator
       name: 'dsh-android-emulator'

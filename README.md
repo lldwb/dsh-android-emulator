@@ -242,8 +242,30 @@ dsh plugin add github:lldwb/dsh-android-emulator
 dsh --profile <你的profile> --dump-config | Select-String android-emulator
 ```
 
-或在新会话里让 agent 调用一次 `android_status`：能返回结构化结果（哪怕 `ok:false`）就说明工具
-注册成功；若模型完全看不到这些工具，那是 patch 行没进合成树，而不是本插件内部的问题。
+或在新会话里**先加载一次技能**再让 agent 调用 `android_status`（v1.3.0 起工具按需加载，
+不加载技能时模型看不到它们，见下一节）：能返回结构化结果（哪怕 `ok:false`）就说明工具
+注册成功；若加载技能后仍然完全看不到这些工具，那是 patch 行没进合成树，而不是本插件内部的问题。
+
+## 按需加载：工具默认隐藏，加载 skill 后才出现（1.3.0）
+
+v1.3.0 起 15 个 `android_*` 工具**不再常驻**模型工具表（每请求省下整包 schema），而是用
+与 `dsh-desktop-control` 0.8.0 相同的「skill 门控」：工具默认隐藏，模型加载本插件自带的
+`android-emulator` 技能后从**下一个模型步**出现。
+
+- **触发方式（任选其一）**
+  - 模型自己调 `skill({ name: "android-emulator" })`——该技能的 description/whenToUse 写明了
+    「需要启安卓模拟器、装 APK、点界面、看 logcat、截图验证时」加载；
+  - 用户输入 `/android-emulator` 斜杠调用；
+  - `resume` / `fork` 过的会话，历史请求头里已声明过本插件工具 → 自动放行，不用重新加载。
+- **为什么"加载了却还调不到"是正常的**：工具表在一次模型步内是固定的，门控在**下一步**才
+  生效。所以加载后这一步仍可能报 `unknown tool`，下一步再调即可；**不要当成功能不存在**。
+- **恢复常驻**：配置 `onDemand: false`，工具永远可见（1.2.x 的老行为）。
+- **fail-open 边界**：没有 `skill` 工具的模式（`minimal` 等）**自动常驻**——那些模式没有
+  加载技能的入口，门控等于把工具永久藏起来。判据是该 agent 自己 scope 的可见工具集
+  （`ctx.tools.get('skill', agent)`），与宿主平面是否注册了 skill 服务无关。
+- 技能正文单独放在 `lib/skill-content.md`：`android_status` 探环境 → 会话专属 AVD 与
+  `maxInstances`/磁盘预算 → 装包（ABI 预检、`translated` 不要用耗时判性能）→ 启动/停止 →
+  UI 树与点击/滑动/输入/按键/等待 → 截图 → logcat 定位崩溃。
 
 ## 工具集（15 个）
 
@@ -355,6 +377,7 @@ dsh --profile <你的profile> --dump-config | Select-String android-emulator
         perSession: true
         maxInstances: 2
         avdNamePrefix: ''
+        onDemand: true
 ```
 
 | 配置项 | 默认值 | 说明 |
@@ -369,6 +392,7 @@ dsh --profile <你的profile> --dump-config | Select-String android-emulator
 | `perSession` | `true` | `true`＝每会话独立模拟器与状态（v1.2.0 默认）；`false`＝全部会话共享一台（v1.1 行为），见「多会话隔离」 |
 | `maxInstances` | `2` | `perSession: true` 时同时运行的模拟器上限（钳制 1–8）。到上限后 `emulator_start` 返回 `DEVICE_BUSY` |
 | `avdNamePrefix` | `''` | 会话专属 AVD 名的前缀；空则用 `avdName`。最终形如 `<前缀>--<sessionShort>` |
+| `onDemand` | `true` | 按需门控（v1.3.0）：15 个工具默认不进模型工具表，加载 `android-emulator` 技能后从下一步出现；`false` = 常驻（工具永远可见）。没有 `skill` 工具的模式自动 fail-open 常驻 |
 
 ## 多会话隔离（v1.2.0）
 
@@ -664,6 +688,25 @@ Cordis 公开 API；rc.2 的 `Session.append` 重载、runtime-context 提醒包
 | `devkit_sandbox_create` / `install`（`a-android-emulator-regress`，headless） | exit 0（`dsh-android-emulator@1.2.5` 链入沙箱 profile） |
 | `devkit_sandbox_compose { grep: "android-emulator" }` | 合成树出现 `# == dsh-android-emulator` / `- id: android-emulator` / `name: dsh-android-emulator` |
 | `devkit_sandbox_run`（「调用 android_status（无参数），把原始输出逐字贴出来」） | **exit 0，工具真的被调用**：SDK `C:\Users\32471\Android\Sdk`、无 AVD、1 个 x86_64 系统镜像、本会话 0 台设备、`whpx` 可用；**无 `did not activate`、无 `tool returned invalid output`** |
+
+### 按需门控（1.3.0，2026-11-24）
+
+工具改为按需加载后，唯一能证明「门控真的生效、加载后真的出现」的是**真实 Loader 沙箱回归**
+（离线单测只能证明接线）。本次三步的原始结果：
+
+| 步 | 原始输出（关键行） |
+|---|---|
+| `devkit_sandbox_create`（headless `ondemand-android-emulator`） | 沙箱创建成功，退出码 0 |
+| `devkit_sandbox_install`（本包） | `dsh-android-emulator 1.3.0 <- E:\dsh-plugins\dsh-android-emulator` |
+| `devkit_sandbox_compose { grep: "android-emulator" }` | `# == dsh-android-emulator` / `- id: android-emulator` / `name: dsh-android-emulator` |
+| `devkit_sandbox_run` 第 1 步：不加载技能直接调 `android_status` | `Error: unknown tool "android_status"` ← **门控生效** |
+| 第 2 步：`skill` 加载 `android-emulator` | `<skill_content name="android-emulator">`（含 `<skill_resources>` / `<skill_instructions>`） |
+| 第 3 步：再调 `android_status` | 工具**真的执行**：`Android SDK：C:\Users\<用户>\Android\Sdk`、`AVD：（无）`、`系统镜像：1 个，含 x86_64`、`实例：0/2 台在线`、`硬件加速：可用（whpx）`；**无 `unknown tool`、无 `tool returned invalid output`** |
+| `devkit_sandbox_destroy` | 已删除，零残留 |
+
+单测：`node --test "test/**/*.test.mjs"` → **194 pass / 0 fail**（原 184 条一条未红，
+新增 `test/on-demand.test.mjs` 10 条）。本轮**没有启动任何 Android 模拟器**：沙箱回归只验证
+工具可见性变化，第 3 步的 `android_status` 是只读探测（SDK / 设备列表 / 磁盘）。
 
 ### 实测结果（2026-10-24，Windows 11 / AMD Ryzen AI 9 H 365 / 30.8 GB RAM / Hyper-V 开启）
 

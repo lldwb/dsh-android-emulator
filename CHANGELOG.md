@@ -5,6 +5,56 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.0] - 2026-11-24
+
+### 变更（**默认行为变化**：工具改为按需加载）
+
+- **15 个 `android_*` 工具改为「按需门控」**：平时**不进**模型工具表（每请求省下整包 schema），
+  模型用 `skill` 工具加载本插件自带的 `android-emulator` 技能后，从**下一个模型步**开始出现；
+  用户也可以 `/android-emulator` 斜杠调用触发。这是 `dsh-desktop-control` 0.8.0 已验证模式
+  的同一份实现（`createToolGate`），没有第二种模式。
+- **新增随插件的 runtime skill `android-emulator`**（`lib/skill.mjs` + `lib/skill-content.md`，
+  `ctx.skills.register` 注册）：写明「`android_status` 先探环境 → 会话专属 AVD 与
+  `maxInstances`/磁盘预算 → 装包（ABI 预检、`translated` 不要用耗时判性能）→ 启动/停止 →
+  UI 树 + 点击/滑动/输入/按键/等待 → 截图 → logcat 定位崩溃」，并明确「工具是按需的，
+  加载本技能后从下一步出现」。
+- **新增配置 `onDemand`（默认 `true`）**：设 `false` 恢复 1.2.x 的常驻行为（工具永远可见）。
+  没有 `skill` 工具的模式（`minimal` 等）**fail-open** 自动保持常驻——判据是该 agent 自己
+  scope 里 `ctx.tools.get('skill', agent)` 是否可见，不用 `ctx.get('skills')`
+  （宿主平面看不到 preset 内注册的 skill 服务，那样会永远 fail-open 等于没门控）。
+- `resume` / `fork` 兜底：会话历史请求头里已声明过本插件工具时直接放行（内存标记会丢，
+  历史声明不会）。`agent/disposed` 时清掉该 agent 的内存标记。
+
+### 升级须知
+
+- **升级后模型默认看不到 `android_*` 工具**，这是预期行为：任务涉及安卓设备时让它先
+  `skill({ name: "android-emulator" })`，或用户输入 `/android-emulator`。
+- 不想要按需（例如某些自动化脚本直接依赖工具常驻）：`config.onDemand: false`。
+- 升级不需要改 AVD/设备状态，与 v1.2 的多会话隔离、磁盘预算完全兼容。
+
+### 验证
+
+- 单测：`node --check index.js` / `lib/skill.mjs` / `test/on-demand.test.mjs` 全过；
+  `node --test "test/**/*.test.mjs"` → **194 pass / 0 fail**（原 184 条一条未红，新增 10 条）。
+- 新增 `test/on-demand.test.mjs` 覆盖：默认门控（15 个工具全部带 `when`）/ skill 注册与
+  kebab-case 名 / 加载后放行 / 别的 skill 不放行 / 失败调用不放行 / 斜杠调用 /
+  resume 兜底 / fail-open / `onDemand:false` / `normalizeConfig` 默认值 /
+  `agent` 缺失与 `requestHeader()` 抛错与 dispose 清标记。
+- **真实 Loader 沙箱回归**（devkit headless `ondemand-android-emulator`）：
+
+  | 步 | 原始结果 |
+  |---|---|
+  | `devkit_sandbox_create`（headless） | 成功，退出码 0 |
+  | `devkit_sandbox_install`（本包） | `dsh-android-emulator 1.3.0 <- E:\dsh-plugins\dsh-android-emulator` |
+  | `devkit_sandbox_compose { grep: "android-emulator" }` | 合成树出现 `# == dsh-android-emulator` / `- id: android-emulator` / `name: dsh-android-emulator` |
+  | `devkit_sandbox_run` 第 1 步（不加载技能直接调 `android_status`） | `Error: unknown tool "android_status"` ✅ 门控生效 |
+  | 第 2 步（`skill` 加载 `android-emulator`） | `<skill_content name="android-emulator">`（外加 `<skill_resources>` / `<skill_instructions>`） |
+  | 第 3 步（再调 `android_status`） | 工具**真的执行**并返回环境原文：`Android SDK：C:\Users\<用户>\Android\Sdk`、`AVD：（无）`、`实例：0/2 台在线`、`硬件加速：可用（whpx）`；无 `unknown tool`、无 `tool returned invalid output` |
+  | `devkit_sandbox_destroy` | 已删除，零残留 |
+
+  沙箱回归只验证**工具可见性与注册**，全程未启动任何 Android 模拟器（第 3 步 `android_status`
+  只探测 SDK 与设备列表）。
+
 ## [1.2.6] - 2026-11-12
 
 ### 文档
@@ -266,6 +316,7 @@
 - **零运行时依赖**：不 import `@deepseek-ai/*`、不需要 `node_modules`，安装后立即可用，
   `install_bundle` 不会产生 pendingBuilds。
 
+[1.3.0]: https://github.com/lldwb/dsh-android-emulator/releases/tag/v1.3.0
 [1.2.0]: https://github.com/lldwb/dsh-android-emulator/releases/tag/v1.2.0
 [1.1.2]: https://github.com/lldwb/dsh-android-emulator/releases/tag/v1.1.2
 [1.1.1]: https://github.com/lldwb/dsh-android-emulator/releases/tag/v1.1.1
