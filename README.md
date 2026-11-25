@@ -3,6 +3,13 @@
 > 给 DeepSeek Harness 装上一台**可以被 agent 自己操作的 Android 模拟器**：启动 AVD、安装 APK、
 > 像用户一样点击/滑动/输入，并把界面（UI 树 + 截图）和日志回传给模型。
 
+## 加载方式
+
+加载方式：按需（skill: `android-emulator`；入口：`skill` 工具 / `/android-emulator`；关闭：该行 config 设 `onDemand: false`）
+
+> 加载方式是 DSH 插件开发的**必答项**（工作区约定 §10.0）：按需的必须有 skill 入口与
+> `onDemand: false` 退路，常驻的必须写理由。这条标记行供人工审阅与将来做门禁。
+
 ## 这个插件解决什么问题
 
 安卓应用开发的验证环路天然是「改代码 → 装包 → 在设备上点开 → 看界面/日志 → 再改」。
